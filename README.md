@@ -5,7 +5,7 @@
 <h1 align="center">RouterBot</h1>
 
 <p align="center">
-  <strong>One local OpenAI-compatible endpoint — route Cursor to every AI backend you run.</strong>
+  <strong>One local OpenAI-compatible endpoint — route to every AI backend you run.</strong>
 </p>
 
 <p align="center">
