@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RouterBot</title>
+    <link rel="icon" href="/routerbot.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/routerbot.png" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <dialog id="api-key-dialog" class="sheet">
+      <form method="dialog" id="api-key-form" class="sheet-body">
+        <h2>API key</h2>
+        <p class="sheet-lead">Required over Tailscale or tunnels.</p>
+        <label class="field">
+          <input type="password" id="api-key-input" placeholder="Paste key" autocomplete="off" required />
+        </label>
+        <div class="sheet-actions">
+          <button type="submit" class="btn primary">Continue</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="fallback-dialog" class="sheet sheet-wide">
+      <div class="sheet-body">
+        <h2>Fallback chain</h2>
+        <p class="sheet-lead">If the routed provider fails, try these in order.</p>
+        <ol id="fallback-order" class="fallback-order"></ol>
+        <div class="fallback-add">
+          <select id="fallback-add-select" aria-label="Add provider to chain"></select>
+          <button type="button" id="fallback-add-btn" class="btn secondary">Add</button>
+        </div>
+        <div class="sheet-actions">
+          <button type="button" id="fallback-cancel" class="btn secondary">Cancel</button>
+          <button type="button" id="fallback-save" class="btn primary">Done</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="emoji-dialog" class="sheet">
+      <div class="sheet-body">
+        <h2>Provider icon</h2>
+        <p class="sheet-lead">Pick an emoji or paste any emoji below.</p>
+        <div class="emoji-preview" id="emoji-preview" aria-hidden="true"></div>
+        <div class="emoji-grid" id="emoji-grid"></div>
+        <label class="field">
+          <span class="field-label">Custom</span>
+          <input id="emoji-custom" type="text" placeholder="Paste emoji" maxlength="8" />
+        </label>
+        <div class="sheet-actions">
+          <button type="button" id="emoji-cancel" class="btn secondary">Cancel</button>
+          <button type="button" id="emoji-apply" class="btn primary">Apply</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="add-provider-dialog" class="sheet">
+      <form method="dialog" id="add-provider-form" class="sheet-body">
+        <h2>Add provider</h2>
+        <label class="field">
+          <span class="field-label">ID</span>
+          <input id="new-provider-id" pattern="[a-z0-9-]+" required placeholder="ollama-local" />
+        </label>
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input id="new-provider-label" required placeholder="Ollama" />
+        </label>
+        <label class="field">
+          <span class="field-label">Type</span>
+          <select id="new-provider-type">
+            <option value="http">HTTP API</option>
+            <option value="generic-cli">CLI</option>
+          </select>
+        </label>
+        <div class="field">
+          <span class="field-label">Icon</span>
+          <div class="icon-picker-row">
+            <button type="button" class="provider-emoji" id="new-provider-icon-display" title="Selected icon">🌐</button>
+            <input type="text" id="new-provider-icon-input" placeholder="Paste any emoji" maxlength="8" />
+          </div>
+          <div class="emoji-grid emoji-grid-compact" id="new-provider-emoji-grid"></div>
+        </div>
+        <div id="new-provider-http-fields">
+          <label class="field">
+            <span class="field-label">Base URL</span>
+            <input id="new-provider-base-url" placeholder="http://127.0.0.1:11434/v1" />
+          </label>
+          <label class="field">
+            <span class="field-label">API key</span>
+            <input id="new-provider-api-key" type="password" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span class="field-label">Model</span>
+            <input id="new-provider-model" placeholder="llama3.2" />
+          </label>
+        </div>
+        <div id="new-provider-cli-fields" hidden>
+          <label class="field">
+            <span class="field-label">Command</span>
+            <input id="new-provider-command" placeholder="my-cli" />
+          </label>
+          <label class="field">
+            <span class="field-label">Args</span>
+            <input id="new-provider-run-args" placeholder="-m {{model}} -" />
+          </label>
+          <label class="field">
+            <span class="field-label">Model</span>
+            <input id="new-provider-cli-model" />
+          </label>
+        </div>
+        <div class="sheet-actions">
+          <button type="button" class="btn secondary" id="add-provider-cancel">Cancel</button>
+          <button type="submit" class="btn primary">Add</button>
+        </div>
+      </form>
+    </dialog>
+
+    <main class="app">
+      <header class="hero">
+        <div class="hero-brand">
+          <img class="logo-mark" src="/routerbot.png" width="72" height="72" alt="" />
+          <div>
+            <h1>RouterBot</h1>
+            <p class="tagline">One local endpoint — route requests across all your AI backends.</p>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button type="button" id="toggle-settings" class="btn icon-btn" title="Server settings" aria-label="Server settings">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Zm8.94-2.5a7.96 7.96 0 0 0 .06-.99 7.96 7.96 0 0 0-.06-.99l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a8.06 8.06 0 0 0-1.71-.99l-.36-2.54A.5.5 0 0 0 14 2h-4a.5.5 0 0 0-.49.42l-.36 2.54c-.6.24-1.17.56-1.71.99l-2.39-.96a.5.5 0 0 0-.6.22L2.53 8.54a.5.5 0 0 0 .12.64L4.68 10.76c-.04.33-.06.66-.06.99s.02.66.06.99l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.43.34.68.22l2.39-.96c.54.43 1.11.75 1.71.99l.36 2.54c.05.28.27.46.49.46h4c.22 0 .44-.18.49-.42l.36-2.54c.6-.24 1.17-.56 1.71-.99l2.39.96c.25.12.54.02.68-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58Z"/></svg>
+          </button>
+          <button type="button" id="add-provider" class="btn secondary">+ Provider</button>
+          <button type="button" id="save" class="btn primary">Save</button>
+        </div>
+      </header>
+
+      <section class="metrics" id="metrics">
+        <article class="metric-card">
+          <div class="metric-icon" aria-hidden="true">↗</div>
+          <div class="metric-body">
+            <span class="metric-label">Base URL</span>
+            <code class="metric-value" id="routerbot-base-url"></code>
+          </div>
+        </article>
+        <article class="metric-card">
+          <div class="metric-icon" aria-hidden="true">◎</div>
+          <div class="metric-body">
+            <span class="metric-label">Model</span>
+            <code class="metric-value" id="model-name"></code>
+          </div>
+        </article>
+        <article class="metric-card">
+          <div class="metric-icon" aria-hidden="true">🔑</div>
+          <div class="metric-body">
+            <span class="metric-label">API key</span>
+            <code class="metric-value" id="api-key"></code>
+          </div>
+        </article>
+        <article class="metric-card">
+          <div class="metric-icon" aria-hidden="true">◉</div>
+          <div class="metric-body">
+            <span class="metric-label">Health</span>
+            <div class="health-gauge" id="health-gauge" title="Provider readiness"></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel settings-panel" id="settings-panel" hidden>
+        <div class="panel-head">
+          <h2>Server</h2>
+        </div>
+        <div class="settings-grid">
+          <label class="field">
+            <span class="field-label">Tailscale host</span>
+            <input id="setting-tailscale-host" placeholder="machine.tail.ts.net" />
+          </label>
+          <label class="field">
+            <span class="field-label">Tailnet port</span>
+            <input type="number" id="setting-serve-port" min="1" max="65535" />
+          </label>
+          <label class="field">
+            <span class="field-label">Funnel port</span>
+            <input type="number" id="setting-funnel-port" min="1" max="65535" />
+          </label>
+          <label class="field field-span">
+            <span class="field-label">Base URL override</span>
+            <input id="setting-routerbot-base" placeholder="https://host:10000/v1" />
+          </label>
+          <label class="field">
+            <span class="field-label">Model name</span>
+            <input id="setting-exposed-model" />
+          </label>
+          <label class="field">
+            <span class="field-label">API key</span>
+            <input id="setting-api-key" type="password" autocomplete="new-password" />
+          </label>
+        </div>
+      </section>
+
+      <section class="providers-section">
+        <div class="section-head">
+          <h2>Providers</h2>
+          <button type="button" id="refresh-status" class="btn ghost">Refresh</button>
+        </div>
+        <div class="providers-grid" id="providers"></div>
+      </section>
+
+      <section class="lower-grid">
+        <article class="panel routing-panel">
+          <div class="panel-head">
+            <h2>Routing</h2>
+            <button type="button" id="edit-fallback" class="btn ghost">Fallback chain</button>
+          </div>
+          <label class="field compact">
+            <span class="field-label">Default</span>
+            <select id="default-provider"></select>
+          </label>
+          <div class="fallback-viz" id="fallback-viz" aria-label="Fallback order"></div>
+          <div id="routes" class="routes"></div>
+        </article>
+
+        <article class="panel logs-panel">
+          <div class="panel-head">
+            <h2>Activity</h2>
+          </div>
+          <div id="logs" class="logs"></div>
+        </article>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

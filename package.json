@@ -1,0 +1,39 @@
+{
+  "name": "routerbot",
+  "version": "0.1.0",
+  "description": "Self-hosted OpenAI-compatible router for Cursor — Claude, Codex, Gemini, Ollama, and custom backends",
+  "type": "module",
+  "license": "MIT",
+  "author": "Tym Huseby",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SketchOTP/routerbot.git"
+  },
+  "bugs": "https://github.com/SketchOTP/routerbot/issues",
+  "homepage": "https://github.com/SketchOTP/routerbot#readme",
+  "keywords": [
+    "cursor",
+    "openai",
+    "llm",
+    "router",
+    "claude",
+    "codex",
+    "gemini",
+    "ollama",
+    "tailscale",
+    "proxy"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js",
+    "check": "npm test && bash scripts/check-release.sh"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}

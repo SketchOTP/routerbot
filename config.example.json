@@ -1,0 +1,78 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 4117,
+    "exposedModel": "routerbot-local",
+    "apiKey": "",
+    "tailscaleHost": "your-machine.tailXXXX.ts.net",
+    "tailscaleServePort": 9420,
+    "tailscaleFunnelPort": 10000,
+    "cursorBaseUrl": "https://your-machine.tailXXXX.ts.net:10000/v1"
+  },
+  "providers": {
+    "claude": {
+      "type": "builtin",
+      "label": "Claude Code",
+      "icon": "🧠",
+      "enabled": true,
+      "command": "claude",
+      "model": "sonnet",
+      "models": [],
+      "timeoutMs": 300000
+    },
+    "codex": {
+      "type": "builtin",
+      "label": "Codex",
+      "icon": "⚡",
+      "enabled": true,
+      "command": "codex",
+      "model": "",
+      "models": [],
+      "timeoutMs": 300000
+    },
+    "cursor": {
+      "type": "builtin",
+      "label": "Cursor Agent",
+      "icon": "🖱️",
+      "enabled": false,
+      "command": "cursor-agent",
+      "model": "sonnet-4",
+      "models": [],
+      "timeoutMs": 300000
+    },
+    "gemini": {
+      "type": "builtin",
+      "label": "Gemini CLI",
+      "icon": "✨",
+      "enabled": false,
+      "command": "gemini",
+      "model": "auto",
+      "models": [],
+      "timeoutMs": 300000
+    },
+    "ollama-local": {
+      "type": "http",
+      "label": "Ollama (local)",
+      "icon": "🌐",
+      "enabled": false,
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "apiKey": "",
+      "model": "llama3.2",
+      "models": [],
+      "timeoutMs": 300000
+    }
+  },
+  "routing": {
+    "defaultProvider": "codex",
+    "fallbackChain": ["codex", "ollama-local"],
+    "taskRoutes": {
+      "code": "codex",
+      "debug": "codex",
+      "review": "codex",
+      "plan": "claude",
+      "explain": "codex",
+      "docs": "claude",
+      "quick": "codex"
+    }
+  }
+}
