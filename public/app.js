@@ -37,8 +37,21 @@ const authUi = {
   claude: { label: "Sign in", short: "Browser" },
   codex: { label: "Device login", short: "Device" },
   cursor: { label: "Sign in", short: "Browser" },
-  gemini: { label: "Google", short: "OAuth" }
+  gemini: { label: "Google sign-in", short: "OAuth" }
 };
+
+let authFlowsMeta = { ...authUi };
+let statusRefreshTimer = null;
+/** Providers with an open sign-in panel — skip full card re-render so code inputs stay visible. */
+const authInProgress = new Set();
+/** Persisted auth panel content (URL, code draft) across status refreshes. */
+const authPanelState = new Map();
+/** While true, defer full provider-card rebuilds so open dropdowns stay open. */
+let providerUiLock = false;
+let pendingProviderRender = false;
+let lastStatusFetchMs = 0;
+const STATUS_MIN_INTERVAL_MS = 8000;
+const AUTH_POLL_INTERVAL_MS = 8000;
 
 let config;
 let statuses = {};
@@ -207,10 +220,11 @@ function ensureFallbackChain() {
 await loadConfig();
 render();
 connectLogs();
+bindProviderInteractionLock();
 refreshStatus();
 
 els.save.addEventListener("click", saveConfig);
-els.refreshStatus.addEventListener("click", refreshStatus);
+els.refreshStatus.addEventListener("click", () => refreshStatus({ manual: true }));
 els.addProvider.addEventListener("click", openAddProviderDialog);
 els.addProviderCancel.addEventListener("click", () => els.addProviderDialog.close());
 els.newProviderType.addEventListener("change", () => {
@@ -287,9 +301,49 @@ function newProviderIconValue() {
 }
 
 async function loadConfig() {
-  const response = await apiFetch("/api/config");
-  config = await response.json();
+  const [configRes, flowsRes] = await Promise.all([
+    apiFetch("/api/config"),
+    apiFetch("/api/auth/flows").catch(() => null)
+  ]);
+  config = await configRes.json();
+  if (flowsRes?.ok) {
+    const body = await flowsRes.json();
+    authFlowsMeta = body.flows ?? authFlowsMeta;
+  }
   ensureFallbackChain();
+}
+
+function authFlow(provider) {
+  return authFlowsMeta[provider] ?? { mode: "browser", signInLabel: "Sign in", reSignInLabel: "Re-sign in" };
+}
+
+function authButtonLabel(provider) {
+  const flow = authFlow(provider);
+  const ready = statuses[provider]?.ok;
+  return ready ? flow.reSignInLabel ?? "Re-sign in" : flow.signInLabel ?? authUi[provider]?.label ?? "Sign in";
+}
+
+function scheduleStatusRefresh(delayMs = 400) {
+  clearTimeout(statusRefreshTimer);
+  statusRefreshTimer = setTimeout(() => {
+    refreshStatus().catch(() => {});
+  }, delayMs);
+}
+
+async function copyText(text, button) {
+  if (!text) {
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    const prev = button.textContent;
+    button.textContent = "Copied";
+    setTimeout(() => {
+      button.textContent = prev;
+    }, 1500);
+  } catch {
+    window.prompt("Copy this:", text);
+  }
 }
 
 function tailscaleFromConfig(server) {
@@ -396,7 +450,13 @@ function updateServerFromSettings() {
   renderConnectionBanner();
 }
 
-function renderProviders() {
+function renderProviders(options = {}) {
+  if (!options.force && providerUiLock) {
+    pendingProviderRender = true;
+    patchProviderStatuses();
+    return;
+  }
+  pendingProviderRender = false;
   els.providers.innerHTML = "";
   for (const provider of providerOrder()) {
     const providerConfig = config.providers[provider];
@@ -406,15 +466,19 @@ function renderProviders() {
     const custom = isCustomProvider(provider);
     const auth = authUi[provider];
     const icon = providerIcon(provider, providerConfig);
+    const statusLine = status?.output ? truncateStatus(status.output) : "";
+    const signInLabel = authButtonLabel(provider);
 
     const card = document.createElement("article");
     card.className = "provider-card";
+    card.dataset.providerCard = provider;
     card.innerHTML = `
       <div class="provider-top">
         <button type="button" class="provider-emoji" data-emoji="${provider}" title="Change icon">${icon}</button>
         <div class="provider-meta">
           <h3>${escapeHtml(label)}</h3>
           <span class="provider-id">${escapeHtml(provider)}</span>
+          ${statusLine ? `<p class="provider-status-line ${status?.ok ? "ok" : "bad"}">${escapeHtml(statusLine)}</p>` : ""}
         </div>
         <span class="provider-status ${status?.ok ? "ok" : status ? "bad" : ""}" title="${status?.ok ? "Ready" : "Needs setup"}"></span>
       </div>
@@ -460,23 +524,18 @@ function renderProviders() {
         </div>
       </div>
       <div class="provider-actions">
-        ${auth && !http ? `<button type="button" class="btn secondary sm" data-auth="${provider}">${auth.label}</button>` : ""}
+        ${auth && !http ? `<button type="button" class="btn secondary sm" data-auth="${provider}">${escapeHtml(signInLabel)}</button>` : ""}
         ${custom ? `<button type="button" class="btn ghost sm danger-text" data-remove="${provider}">Remove</button>` : ""}
       </div>
-      ${
-        provider === "gemini"
-          ? `<div class="gemini-code-row">
-          <input type="text" placeholder="Auth code" data-gemini-code autocomplete="off" />
-          <button type="button" class="btn secondary sm" data-gemini-submit-code>OK</button>
-        </div>`
-          : ""
-      }
       <div class="auth-panel" data-auth-panel="${provider}" hidden></div>
     `;
     els.providers.append(card);
   }
 
   bindProviderEvents();
+  for (const provider of authInProgress) {
+    paintAuthPanel(provider);
+  }
 }
 
 function initEmojiGrid(container, onPick) {
@@ -526,6 +585,32 @@ async function applyEmojiPick() {
   await saveConfig();
 }
 
+function bindProviderInteractionLock() {
+  els.providers.addEventListener("mousedown", (event) => {
+    if (event.target.matches("select")) {
+      providerUiLock = true;
+    }
+  });
+  els.providers.addEventListener("focusin", (event) => {
+    if (event.target.matches("select, input, textarea, button")) {
+      providerUiLock = true;
+    }
+  });
+  els.providers.addEventListener("focusout", () => {
+    setTimeout(() => {
+      const active = document.activeElement;
+      const stillInProviderField =
+        active && els.providers.contains(active) && active.matches("select, input, textarea");
+      if (!stillInProviderField) {
+        providerUiLock = false;
+        if (pendingProviderRender) {
+          renderProviders({ force: true });
+        }
+      }
+    }, 300);
+  });
+}
+
 function bindProviderEvents() {
   els.providers.querySelectorAll("[data-emoji]").forEach((button) => {
     button.addEventListener("click", () => openEmojiPicker(button.dataset.emoji));
@@ -535,7 +620,11 @@ function bindProviderEvents() {
     input.addEventListener("change", updateProviderFromInput);
   });
   els.providers.querySelectorAll("[data-auth]").forEach((button) => {
-    button.addEventListener("click", () => startAuth(button.dataset.auth, button));
+    button.addEventListener("click", () => {
+      const provider = button.dataset.auth;
+      const force = Boolean(statuses[provider]?.ok);
+      startAuth(provider, button, { force });
+    });
   });
   els.providers.querySelectorAll("[data-refresh-models]").forEach((button) => {
     button.addEventListener("click", () => refreshProviderModels(button.dataset.refreshModels, button));
@@ -543,33 +632,17 @@ function bindProviderEvents() {
   els.providers.querySelectorAll("[data-remove]").forEach((button) => {
     button.addEventListener("click", () => removeProvider(button.dataset.remove));
   });
-  const geminiCodeInput = els.providers.querySelector("[data-gemini-code]");
-  const geminiSubmitCode = els.providers.querySelector("[data-gemini-submit-code]");
-  if (geminiCodeInput && geminiSubmitCode) {
-    geminiSubmitCode.addEventListener("click", () => submitGeminiAuthCode(geminiCodeInput, geminiSubmitCode));
-    geminiCodeInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        submitGeminiAuthCode(geminiCodeInput, geminiSubmitCode);
-      }
-    });
-  }
 }
 
 function modelOptions(providerConfig) {
-  const models = providerConfig.models?.length
-    ? providerConfig.models
-    : providerConfig.model
-      ? [{ id: providerConfig.model, name: providerConfig.model }]
-      : [{ id: "", name: "Default" }];
+  const models = providerConfig.models ?? [];
+  if (!models.length) {
+    return `<option value="" selected>Load models (↻)</option>`;
+  }
 
-  const options = providerConfig.model
-    ? models
-    : [{ id: "", name: "Default" }, ...models.filter((m) => m.id !== "")];
-
-  return options
+  return models
     .map((model) => {
-      const label = model.name && model.name !== model.id ? model.name : model.id || "Default";
+      const label = model.name && model.name !== model.id ? model.name : model.id;
       return `<option value="${escapeAttr(model.id)}" ${providerConfig.model === model.id ? "selected" : ""}>${escapeHtml(label)}</option>`;
     })
     .join("");
@@ -797,23 +870,174 @@ function removeProvider(provider) {
   saveConfig();
 }
 
-function showAuthPanel(provider, session) {
-  const panel = document.querySelector(`[data-auth-panel="${provider}"]`);
-  if (!panel) {
+function truncateStatus(text) {
+  const oneLine = String(text).replace(/\s+/g, " ").trim();
+  return oneLine.length > 120 ? `${oneLine.slice(0, 117)}…` : oneLine;
+}
+
+function patchProviderModelSelect(provider) {
+  const card = els.providers.querySelector(`[data-provider-card="${provider}"]`);
+  const select = card?.querySelector(`select[data-provider="${provider}"][data-key="model"]`);
+  if (!select) {
     return;
   }
-  panel.hidden = false;
-  const parts = [
-    `<a class="auth-open-link" href="${escapeAttr(session.url)}" target="_blank" rel="noopener noreferrer">Open sign-in</a>`
-  ];
-  if (session.deviceCode) {
-    parts.push(`<p class="sheet-lead" style="margin:8px 0 0">Code: <strong>${escapeHtml(session.deviceCode)}</strong></p>`);
+  const providerConfig = config.providers[provider];
+  const selected = providerConfig.model ?? "";
+  select.innerHTML = modelOptions(providerConfig);
+  select.value = selected;
+}
+
+function patchProviderStatuses() {
+  for (const provider of providerOrder()) {
+    const card = els.providers.querySelector(`[data-provider-card="${provider}"]`);
+    if (!card) {
+      continue;
+    }
+    const status = statuses[provider];
+    const dot = card.querySelector(".provider-status");
+    if (dot) {
+      dot.className = `provider-status ${status?.ok ? "ok" : status ? "bad" : ""}`;
+      dot.title = status?.ok ? "Ready" : "Needs setup";
+    }
+    let line = card.querySelector(".provider-status-line");
+    const statusLine = status?.output ? truncateStatus(status.output) : "";
+    if (statusLine) {
+      if (!line) {
+        line = document.createElement("p");
+        line.className = "provider-status-line";
+        card.querySelector(".provider-meta")?.append(line);
+      }
+      line.textContent = statusLine;
+      line.className = `provider-status-line ${status?.ok ? "ok" : "bad"}`;
+      line.hidden = false;
+    } else if (line) {
+      line.hidden = true;
+    }
+    const authBtn = card.querySelector("[data-auth]");
+    if (authBtn) {
+      authBtn.textContent = authButtonLabel(provider);
+    }
   }
+  renderHealthGauge();
+}
+
+function clearAuthPanel(provider) {
+  authPanelState.delete(provider);
+  authInProgress.delete(provider);
+  const panel = document.querySelector(`[data-auth-panel="${provider}"]`);
+  if (panel) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+  }
+}
+
+function showAuthPanel(provider, session = {}) {
+  const prev = authPanelState.get(provider) ?? { session: {}, codeDraft: "" };
+  authPanelState.set(provider, {
+    session: { ...prev.session, ...session },
+    codeDraft: prev.codeDraft
+  });
+  authInProgress.add(provider);
+  paintAuthPanel(provider);
+}
+
+function paintAuthPanel(provider) {
+  const panel = document.querySelector(`[data-auth-panel="${provider}"]`);
+  const state = authPanelState.get(provider);
+  if (!panel || !state) {
+    return;
+  }
+  const session = state.session;
+  panel.hidden = false;
+  const flow = authFlow(provider);
+  const parts = [];
+
+  if (session.alreadyAuthenticated) {
+    parts.push(`<p class="auth-status-msg ok">${escapeHtml(session.message || "Already signed in.")}</p>`);
+    panel.innerHTML = parts.join("");
+    return;
+  }
+
+  if (flow.hint) {
+    parts.push(`<p class="auth-hint">${escapeHtml(flow.hint)}</p>`);
+  }
+
+  if (session.url) {
+    parts.push(`
+      <div class="auth-link-row">
+        <a class="auth-open-link" href="${escapeAttr(session.url)}" target="_blank" rel="noopener noreferrer">Open sign-in page</a>
+        <button type="button" class="btn ghost sm auth-copy" data-copy="${escapeAttr(session.url)}">Copy link</button>
+      </div>
+    `);
+  }
+
+  if (session.deviceCode) {
+    parts.push(`
+      <p class="auth-device-code">
+        Device code: <strong>${escapeHtml(session.deviceCode)}</strong>
+        <button type="button" class="btn ghost sm auth-copy" data-copy="${escapeAttr(session.deviceCode)}">Copy code</button>
+      </p>
+    `);
+  }
+
+  const needsCode = session.mode === "oauth-code" || flow.mode === "oauth-code" || provider === "gemini";
+  if (needsCode) {
+    parts.push(`
+      <div class="auth-code-row">
+        <input type="text" placeholder="Paste authorization code from Google" data-auth-code="${escapeAttr(provider)}" autocomplete="off" />
+        <button type="button" class="btn secondary sm" data-auth-code-submit="${escapeAttr(provider)}">Submit code</button>
+      </div>
+      <p class="auth-hint auth-code-note">After Google redirects you, copy the code and paste it here. This field stays open until you submit.</p>
+    `);
+  }
+
+  if (!parts.length) {
+    parts.push(`<p class="auth-hint">Waiting for sign-in details… check Recent Activity below.</p>`);
+  }
+
   panel.innerHTML = parts.join("");
+  bindAuthPanelEvents(provider, panel, state);
+}
+
+function bindAuthPanelEvents(provider, panel, state) {
+  panel.querySelectorAll(".auth-copy").forEach((button) => {
+    button.addEventListener("click", () => copyText(button.dataset.copy, button));
+  });
+  const input = panel.querySelector(`[data-auth-code="${provider}"]`);
+  const submit = panel.querySelector(`[data-auth-code-submit="${provider}"]`);
+  if (input) {
+    input.value = state?.codeDraft ?? "";
+    input.addEventListener("input", () => {
+      const entry = authPanelState.get(provider);
+      if (entry) {
+        entry.codeDraft = input.value;
+      }
+    });
+  }
+  if (input && submit) {
+    submit.addEventListener("click", () => submitAuthCode(provider, input, submit));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submitAuthCode(provider, input, submit);
+      }
+    });
+  }
+}
+
+function openAuthUrl(url) {
+  if (!url) {
+    return null;
+  }
+  const win = window.open(url, "_blank", "noopener,noreferrer");
+  if (!win) {
+    return null;
+  }
+  return win;
 }
 
 async function pollAuthSession(provider, authWindow) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 90; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 500));
     const response = await apiFetch(`/api/auth/${provider}/session`);
     if (!response.ok) {
@@ -825,9 +1049,13 @@ async function pollAuthSession(provider, authWindow) {
     }
     if (session.url) {
       if (authWindow && !authWindow.closed) {
-        authWindow.location.href = session.url;
+        try {
+          authWindow.location.href = session.url;
+        } catch {
+          openAuthUrl(session.url);
+        }
       } else {
-        window.open(session.url, "_blank", "noopener,noreferrer");
+        openAuthUrl(session.url);
       }
     }
     showAuthPanel(provider, session);
@@ -839,26 +1067,88 @@ async function pollAuthSession(provider, authWindow) {
   return null;
 }
 
-async function startAuth(provider, button) {
-  button.disabled = true;
-  const panel = document.querySelector(`[data-auth-panel="${provider}"]`);
-  if (panel) {
-    panel.hidden = true;
-    panel.innerHTML = "";
+async function pollAuthCompletion(provider, maxMs = 120000) {
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    await new Promise((resolve) => setTimeout(resolve, AUTH_POLL_INTERVAL_MS));
+    await refreshStatus();
+    if (statuses[provider]?.ok) {
+      clearAuthPanel(provider);
+      return true;
+    }
+    const stateRes = await apiFetch(`/api/auth/${provider}/state`);
+    if (stateRes.ok) {
+      const state = await stateRes.json();
+      if (!state.inProgress && !statuses[provider]?.ok) {
+        return false;
+      }
+    }
   }
-  const authWindow = window.open("about:blank", "_blank");
+  return false;
+}
+
+async function watchAuthAfterCodeSubmit(provider) {
+  const ok = await pollAuthCompletion(provider);
+  if (!ok && authInProgress.has(provider)) {
+    showAuthPanel(provider, { mode: "oauth-code" });
+    prependLog({
+      at: new Date().toISOString(),
+      provider,
+      type: "auth",
+      level: "warn",
+      message: "Sign-in still pending — paste the authorization code and click Submit code."
+    });
+  }
+}
+
+async function startAuth(provider, button, { force = false } = {}) {
+  button.disabled = true;
+  clearAuthPanel(provider);
+  const flow = authFlow(provider);
+  let authWindow = null;
+
   try {
     await saveConfig();
-    const response = await apiFetch(`/api/auth/${provider}/start`, { method: "POST" });
+    const response = await apiFetch(`/api/auth/${provider}/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force })
+    });
+    const body = await response.json();
     if (!response.ok) {
-      const body = await response.json();
       throw new Error(body.error?.message ?? "Auth failed");
     }
-    await pollAuthSession(provider, authWindow);
+
+    if (body.alreadyAuthenticated) {
+      showAuthPanel(provider, {
+        alreadyAuthenticated: true,
+        message: body.output
+      });
+      await refreshStatus();
+      authInProgress.delete(provider);
+      return;
+    }
+
+    authInProgress.add(provider);
+    showAuthPanel(provider, { mode: body.mode ?? flow.mode });
+
+    if (flow.mode === "oauth-code" || body.mode === "oauth-code") {
+      await pollAuthSession(provider, null);
+      return;
+    }
+
+    authWindow = window.open("about:blank", "_blank");
+    const session = await pollAuthSession(provider, authWindow);
+    if (!session?.url && authWindow && !authWindow.closed) {
+      authWindow.close();
+      authWindow = null;
+    }
+    await pollAuthCompletion(provider);
   } catch (error) {
     if (authWindow && !authWindow.closed) {
       authWindow.close();
     }
+    showAuthPanel(provider, { mode: flow.mode });
     prependLog({ at: new Date().toISOString(), provider, type: "auth", level: "error", message: error.message });
   } finally {
     setTimeout(() => {
@@ -867,7 +1157,7 @@ async function startAuth(provider, button) {
   }
 }
 
-async function submitGeminiAuthCode(input, button) {
+async function submitAuthCode(provider, input, button) {
   const code = input.value.trim();
   if (!code) {
     return;
@@ -884,9 +1174,13 @@ async function submitGeminiAuthCode(input, button) {
       throw new Error(body.error?.message ?? "Failed");
     }
     input.value = "";
-    setTimeout(refreshStatus, 3000);
+    const entry = authPanelState.get(provider);
+    if (entry) {
+      entry.codeDraft = "";
+    }
+    await watchAuthAfterCodeSubmit(provider);
   } catch (error) {
-    prependLog({ at: new Date().toISOString(), provider: "gemini", type: "auth", level: "error", message: error.message });
+    prependLog({ at: new Date().toISOString(), provider, type: "auth", level: "error", message: error.message });
   } finally {
     button.disabled = false;
   }
@@ -902,7 +1196,12 @@ async function refreshProviderModels(provider, button) {
       throw new Error(body.error?.message ?? "Failed");
     }
     config.providers[provider].models = body.models;
-    renderProviders();
+    if (providerUiLock) {
+      patchProviderModelSelect(provider);
+      patchProviderStatuses();
+    } else {
+      renderProviders();
+    }
   } catch (error) {
     prependLog({ at: new Date().toISOString(), provider, type: "models", level: "error", message: error.message });
   } finally {
@@ -910,14 +1209,20 @@ async function refreshProviderModels(provider, button) {
   }
 }
 
-async function refreshStatus() {
+async function refreshStatus({ manual = false } = {}) {
+  const now = Date.now();
+  if (!manual && now - lastStatusFetchMs < STATUS_MIN_INTERVAL_MS) {
+    return;
+  }
+  lastStatusFetchMs = now;
+
   els.refreshStatus.disabled = true;
   try {
-    const response = await apiFetch("/api/status");
+    const query = manual ? "?force=1&quiet=0" : "?quiet=1";
+    const response = await apiFetch(`/api/status${query}`);
     const body = await response.json();
     statuses = Object.fromEntries(body.statuses.map((s) => [s.provider, s]));
-    renderHealthGauge();
-    renderProviders();
+    patchProviderStatuses();
   } finally {
     els.refreshStatus.disabled = false;
   }
@@ -945,6 +1250,26 @@ function prependLog(entry) {
   els.logs.prepend(item);
   while (els.logs.children.length > 80) {
     els.logs.lastElementChild.remove();
+  }
+
+  if (
+    entry.type === "auth-complete" ||
+    (entry.type === "auth" && /signed in|logged in|sign-in completed|authorization code submitted/i.test(entry.message))
+  ) {
+    scheduleStatusRefresh();
+  }
+
+  if (entry.type === "auth" && /https:\/\/\S+/i.test(entry.message)) {
+    const provider = entry.provider;
+    if (provider && authInProgress.has(provider)) {
+      const urlMatch = entry.message.match(/https:\/\/\S+/i);
+      if (urlMatch) {
+        showAuthPanel(provider, {
+          url: urlMatch[0].replace(/[)\]}>"']+$/, ""),
+          mode: authFlow(provider).mode
+        });
+      }
+    }
   }
 }
 

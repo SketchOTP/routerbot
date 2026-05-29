@@ -2,11 +2,12 @@ import cors from "cors";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { AUTH_FLOWS } from "./authFlows.js";
 import { createAuthMiddleware } from "./auth.js";
 import { readConfig, writeConfig } from "./configStore.js";
-import { getLogs, subscribeLogs } from "./logStore.js";
+import { getLogs, subscribeLogs, addLog } from "./logStore.js";
 import { registerOpenAiRoutes } from "./openaiApi.js";
-import { getAuthSession, listModels, runStatus, startAuth, submitGeminiAuthCode } from "./cli.js";
+import { getAuthSession, getAuthState, listModels, runStatus, startAuth, submitGeminiAuthCode } from "./cli.js";
 import { tailscaleUrls } from "./tailscaleUrls.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +20,42 @@ app.use(express.static(path.resolve(__dirname, "../public")));
 
 const getConfig = async () => cachedConfig;
 const adminAuth = createAuthMiddleware(getConfig, { allowLocalhost: true });
+
+const STATUS_CACHE_MS = 15000;
+let statusSnapshot = { at: 0, body: null };
+
+async function collectProviderStatuses(config, { quiet = true } = {}) {
+  return Promise.all(
+    Object.entries(config.providers).map(async ([provider, providerConfig]) => {
+      try {
+        const result = await runStatus(provider, providerConfig, { quiet });
+        return {
+          provider,
+          ok: true,
+          output: result.stdout || result.stderr
+        };
+      } catch (error) {
+        if (!quiet) {
+          addLog({
+            type: "status",
+            provider,
+            level: "warn",
+            message: error.stderr || error.message
+          });
+        }
+        return {
+          provider,
+          ok: false,
+          output: error.stderr || error.message
+        };
+      }
+    })
+  );
+}
+
+function invalidateStatusCache() {
+  statusSnapshot = { at: 0, body: null };
+}
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
@@ -35,27 +72,29 @@ app.put("/api/config", async (req, res) => {
   res.json(cachedConfig);
 });
 
-app.get("/api/status", async (_req, res) => {
+app.get("/api/status", async (req, res) => {
+  const force = req.query.force === "1";
+  const quiet = req.query.quiet !== "0";
+  const now = Date.now();
+
+  if (!force && statusSnapshot.body && now - statusSnapshot.at < STATUS_CACHE_MS) {
+    res.json(statusSnapshot.body);
+    return;
+  }
+
   const config = await getConfig();
-  const statuses = await Promise.all(
-    Object.entries(config.providers).map(async ([provider, providerConfig]) => {
-      try {
-        const result = await runStatus(provider, providerConfig);
-        return {
-          provider,
-          ok: true,
-          output: result.stdout || result.stderr
-        };
-      } catch (error) {
-        return {
-          provider,
-          ok: false,
-          output: error.stderr || error.message
-        };
-      }
-    })
-  );
-  res.json({ statuses });
+  const statuses = await collectProviderStatuses(config, { quiet });
+  const body = { statuses, checkedAt: new Date().toISOString() };
+  statusSnapshot = { at: now, body };
+  res.json(body);
+});
+
+app.get("/api/auth/flows", (_req, res) => {
+  res.json({ flows: AUTH_FLOWS });
+});
+
+app.get("/api/auth/:provider/state", (req, res) => {
+  res.json(getAuthState(req.params.provider));
 });
 
 app.get("/api/auth/:provider/session", async (req, res) => {
@@ -75,7 +114,11 @@ app.post("/api/auth/:provider/start", async (req, res) => {
     return;
   }
   try {
-    res.json(startAuth(req.params.provider, providerConfig));
+    const result = await startAuth(req.params.provider, providerConfig, {
+      force: Boolean(req.body?.force)
+    });
+    invalidateStatusCache();
+    res.json(result);
   } catch (error) {
     res.status(400).json({ error: { message: error.message } });
   }
@@ -84,6 +127,7 @@ app.post("/api/auth/:provider/start", async (req, res) => {
 app.post("/api/auth/gemini/code", async (req, res) => {
   try {
     res.json(submitGeminiAuthCode(req.body?.code));
+    invalidateStatusCache();
   } catch (error) {
     res.status(400).json({
       error: { message: error.message, type: "routerbot_gemini_auth_code_error" }

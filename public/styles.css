@@ -560,12 +560,40 @@ select:focus {
 
 .auth-panel {
   margin-top: 10px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.auth-hint,
+.auth-status-msg {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted, #9aa0a6);
+}
+
+.auth-status-msg.ok {
+  color: var(--ok, #3dd68c);
+}
+
+.auth-link-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.auth-device-code {
+  margin: 8px 0 0;
+  font-size: 13px;
 }
 
 .auth-open-link {
-  display: block;
+  display: inline-block;
   text-align: center;
-  padding: 10px;
+  padding: 10px 14px;
   border-radius: var(--radius-sm);
   background: var(--accent);
   color: #fff;
@@ -574,14 +602,37 @@ select:focus {
   font-size: 13px;
 }
 
+.auth-code-row,
 .gemini-code-row {
   display: flex;
   gap: 8px;
   margin-top: 8px;
 }
 
+.auth-code-row input,
 .gemini-code-row input {
   flex: 1;
+}
+
+.provider-status-line {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted, #9aa0a6);
+}
+
+.provider-status-line.ok {
+  color: var(--ok, #3dd68c);
+}
+
+.provider-status-line.bad {
+  color: var(--warn, #ffb020);
+}
+
+.auth-code-note {
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.85;
 }
 
 /* Routing */

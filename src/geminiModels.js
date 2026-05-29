@@ -116,12 +116,6 @@ export function loadGeminiCliModelCatalog(command = "gemini") {
       models.push({ id, name: displayName || id });
     }
 
-    for (const id of ["auto", "pro", "flash", "flash-lite"]) {
-      if (!models.some((model) => model.id === id)) {
-        models.unshift({ id, name: `${id} (alias)` });
-      }
-    }
-
     return models.length ? models : null;
   } catch {
     return null;

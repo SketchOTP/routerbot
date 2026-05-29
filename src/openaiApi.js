@@ -11,11 +11,16 @@ import {
   sanitizeAssistantContent
 } from "./providerFallback.js";
 
+function logRouterbotRequest(message, { level = "info", provider = "routerbot" } = {}) {
+  addLog({ type: "request", provider, level, message });
+}
+
 export function registerOpenAiRoutes(app, getConfig) {
   app.use("/v1", createAuthMiddleware(getConfig, { allowLocalhost: false }));
 
-  app.get("/v1/models", async (_req, res) => {
+  app.get("/v1/models", async (req, res) => {
     const config = await getConfig();
+    logRouterbotRequest("GET /v1/models");
     res.json({
       object: "list",
       data: [
@@ -37,6 +42,12 @@ export function registerOpenAiRoutes(app, getConfig) {
     const primary = pickEnabledProvider(config, routedProvider);
     const attempts = buildProviderAttempts(config, primary);
     const started = Date.now();
+    logRouterbotRequest(
+      req.body.stream
+        ? `POST /v1/chat/completions (stream) · task ${task} → ${primary}`
+        : `POST /v1/chat/completions · task ${task} → ${primary}`,
+      { provider: primary }
+    );
 
     addLog({
       type: "route",
@@ -52,16 +63,25 @@ export function registerOpenAiRoutes(app, getConfig) {
       }
 
       const { provider, result } = await runWithFallback(attempts, prompt);
+      const durationMs = Date.now() - started;
+      logRouterbotRequest(
+        `POST /v1/chat/completions → 200 (${durationMs}ms) via ${provider}${provider !== primary ? ` (routed ${primary})` : ""}`,
+        { provider }
+      );
       res.json(
         chatCompletion({
           model: config.server.exposedModel,
           content: sanitizeAssistantContent(result.stdout),
-          durationMs: Date.now() - started,
+          durationMs,
           provider,
           routedProvider: primary
         })
       );
     } catch (error) {
+      logRouterbotRequest(`POST /v1/chat/completions → ${res.statusCode ?? 500}`, {
+        level: "error",
+        provider: primary
+      });
       addLog({
         type: "error",
         provider: primary,
@@ -179,6 +199,10 @@ async function streamCompletion({ res, config, attempts, prompt, started }) {
 
   try {
     const { provider } = await runWithFallback(attempts, prompt, onChunk);
+    const durationMs = Date.now() - started;
+    logRouterbotRequest(`POST /v1/chat/completions (stream) → 200 (${durationMs}ms) via ${provider}`, {
+      provider
+    });
     send({
       id,
       object: "chat.completion.chunk",
@@ -190,6 +214,10 @@ async function streamCompletion({ res, config, attempts, prompt, started }) {
     res.write("data: [DONE]\n\n");
     res.end();
   } catch (error) {
+    logRouterbotRequest(`POST /v1/chat/completions (stream) → error`, {
+      level: "error",
+      provider: attempts[0]?.name ?? "routerbot"
+    });
     if (!roleSent) {
       send({
         id,

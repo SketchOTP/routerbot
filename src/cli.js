@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
+import { unlinkSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { authFlowFor } from "./authFlows.js";
 import { clearAuthSession, getAuthSession, ingestAuthOutput } from "./authSessions.js";
+import { discoverCodexModels } from "./codexModels.js";
 import { checkGeminiAuthStatus, loadGeminiCliModelCatalog } from "./geminiModels.js";
+import { alignProviderModel } from "./modelList.js";
 import { checkHttpStatus, listHttpModels, runHttpProvider } from "./httpProvider.js";
 import { addLog } from "./logStore.js";
 
@@ -11,12 +17,6 @@ const providerSpecs = {
     authArgs: ["auth", "login"],
     statusArgs: ["auth", "status"],
     modelsArgs: null,
-    fallbackModels: [
-      { id: "sonnet", name: "Sonnet (latest alias)" },
-      { id: "opus", name: "Opus (latest alias)" },
-      { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-      { id: "claude-opus-4-6", name: "Claude Opus 4.6" }
-    ],
     runArgs: ({ model }) => [
       "-p",
       "--output-format",
@@ -31,7 +31,7 @@ const providerSpecs = {
   codex: {
     authArgs: ["login", "--device-auth"],
     statusArgs: ["login", "status"],
-    modelsArgs: ["debug", "models"],
+    modelsArgs: null,
     runArgs: ({ model }) => [
       "--ask-for-approval",
       "never",
@@ -59,21 +59,6 @@ const providerSpecs = {
     authArgs: [],
     statusArgs: null,
     modelsArgs: null,
-    fallbackModels: [
-      { id: "auto", name: "Auto (recommended alias)" },
-      { id: "pro", name: "Pro alias" },
-      { id: "flash", name: "Flash alias" },
-      { id: "flash-lite", name: "Flash Lite alias" },
-      { id: "auto-gemini-3", name: "Auto (Gemini 3)" },
-      { id: "auto-gemini-2.5", name: "Auto (Gemini 2.5)" },
-      { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
-      { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
-      { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite" },
-      { id: "gemini-3-pro-preview", name: "Gemini 3 Pro (preview)" },
-      { id: "gemini-3-flash-preview", name: "Gemini 3 Flash (preview)" },
-      { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro (preview)" },
-      { id: "gemini-3.1-flash-lite-preview", name: "Gemini 3.1 Flash Lite (preview)" }
-    ],
     runArgs: ({ model }) => [
       "--skip-trust",
       "--approval-mode",
@@ -103,7 +88,6 @@ function buildGenericSpec(providerConfig) {
     authArgs: providerConfig.authArgs ?? [],
     statusArgs: providerConfig.statusArgs ?? null,
     modelsArgs: providerConfig.modelsArgs ?? null,
-    fallbackModels: providerConfig.fallbackModels ?? [],
     runArgs: ({ model }) => expandArgs(providerConfig.runArgs ?? ["-"], model)
   };
 }
@@ -152,21 +136,23 @@ export function getProviderSpec(provider, providerConfig) {
   return spec;
 }
 
-export async function runStatus(provider, providerConfig) {
+export async function runStatus(provider, providerConfig, { quiet = false } = {}) {
   const type = providerType(provider, providerConfig);
 
   if (type === "http") {
-    return checkHttpStatus(provider, providerConfig);
+    return checkHttpStatus(provider, providerConfig, { quiet });
   }
 
   if (provider === "gemini") {
     const result = checkGeminiAuthStatus();
-    addLog({
-      type: "status",
-      provider,
-      level: result.ok ? "info" : "warn",
-      message: result.output
-    });
+    if (!quiet || !result.ok) {
+      addLog({
+        type: "status",
+        provider,
+        level: result.ok ? "info" : "warn",
+        message: result.output
+      });
+    }
     if (result.ok) {
       return { stdout: result.output, stderr: "", code: 0 };
     }
@@ -185,7 +171,8 @@ export async function runStatus(provider, providerConfig) {
     command: providerConfig.command,
     args: spec.statusArgs,
     timeoutMs: 30000,
-    logType: "status"
+    logType: "status",
+    quiet
   });
 }
 
@@ -196,52 +183,120 @@ export async function listModels(provider, providerConfig) {
     return listHttpModels(provider, providerConfig);
   }
 
-  const spec = getProviderSpec(provider, providerConfig);
+  let models = [];
 
   if (provider === "gemini") {
-    const models = includeSelectedModel(
-      loadGeminiCliModelCatalog(providerConfig.command) ?? spec.fallbackModels ?? [],
-      providerConfig.model
-    );
-    addLog({
-      type: "models",
+    models = loadGeminiCliModelCatalog(providerConfig.command) ?? [];
+    if (!models.length) {
+      throw new Error("Gemini CLI model catalog unavailable — reinstall or upgrade the gemini CLI");
+    }
+  } else if (provider === "codex") {
+    models = await discoverCodexModels(providerConfig.command);
+    if (!models.length) {
+      throw new Error(
+        "Codex CLI model catalog unavailable — upgrade codex or reinstall the codex snap"
+      );
+    }
+  } else {
+    const spec = getProviderSpec(provider, providerConfig);
+    if (!spec.modelsArgs?.length) {
+      addLog({
+        type: "models",
+        provider,
+        level: "info",
+        message: "Provider CLI has no model-list command — leave model empty to use CLI default"
+      });
+      return [];
+    }
+
+    const result = await runProcess({
       provider,
-      level: "info",
-      message: `Loaded ${models.length} models from Gemini CLI catalog`
+      command: providerConfig.command,
+      args: spec.modelsArgs,
+      timeoutMs: 60000,
+      logType: "models",
+      quiet: true
     });
-    return models;
+    models = parseModels(provider, result.stdout);
+    if (!models.length) {
+      throw new Error("Model list command returned no models");
+    }
   }
 
-  if (!spec.modelsArgs) {
-    const models = includeSelectedModel(spec.fallbackModels ?? [], providerConfig.model);
-    addLog({
-      type: "models",
-      provider,
-      level: "info",
-      message: `Using fallback model list (${models.length} models)`
-    });
-    return models;
-  }
-
-  const result = await runProcess({
-    provider,
-    command: providerConfig.command,
-    args: spec.modelsArgs,
-    timeoutMs: 60000,
-    logType: "models"
-  });
-
-  const models = includeSelectedModel(parseModels(provider, result.stdout), providerConfig.model);
+  const aligned = alignProviderModel(providerConfig, models);
   addLog({
     type: "models",
     provider,
     level: "info",
-    message: `Loaded ${models.length} models`
+    message: `Loaded ${aligned.length} models from provider`
   });
-  return models;
+  return aligned;
 }
 
 let geminiAuthSession = null;
+const authProcesses = new Map();
+
+const GEMINI_DIR = join(homedir(), ".gemini");
+
+function trackAuthProcess(provider, child) {
+  authProcesses.set(provider, { pid: child.pid, startedAt: Date.now() });
+  const finish = (code, signal) => {
+    authProcesses.delete(provider);
+    addLog({
+      type: code === 0 ? "auth-complete" : "auth",
+      provider,
+      level: code === 0 ? "info" : "warn",
+      message:
+        code === 0
+          ? "Sign-in completed successfully."
+          : `Auth process exited with code ${code ?? "null"} signal ${signal ?? "none"}`
+    });
+  };
+  child.on("exit", finish);
+  child.on("error", () => authProcesses.delete(provider));
+}
+
+function isReadyFromStatus(provider, result) {
+  const out = (result.stdout || result.stderr || "").trim();
+  if (provider === "gemini") {
+    return checkGeminiAuthStatus().ok;
+  }
+  if (provider === "claude") {
+    try {
+      return JSON.parse(out).loggedIn === true;
+    } catch {
+      return /logged.?in/i.test(out);
+    }
+  }
+  return /logged in|signed in|✓/i.test(out);
+}
+
+async function checkProviderReady(provider, providerConfig) {
+  const result = await runStatus(provider, providerConfig);
+  return {
+    ok: isReadyFromStatus(provider, result),
+    output: (result.stdout || result.stderr || "").trim()
+  };
+}
+
+function clearGeminiCredentials() {
+  for (const name of ["oauth_creds.json"]) {
+    try {
+      unlinkSync(join(GEMINI_DIR, name));
+    } catch {
+      // ignore missing file
+    }
+  }
+}
+
+export function getAuthState(provider) {
+  return {
+    provider,
+    flow: authFlowFor(provider),
+    session: getAuthSession(provider),
+    inProgress: authProcesses.has(provider) || (provider === "gemini" && Boolean(geminiAuthSession))
+  };
+}
 
 function stripAnsi(text) {
   return text.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/\r/g, "");
@@ -263,9 +318,13 @@ function stopGeminiAuthSession(reason) {
   }
 }
 
-function startGeminiAuth(providerConfig) {
+function startGeminiAuth(providerConfig, { force = false } = {}) {
   stopGeminiAuthSession("Replacing pending Gemini login");
   clearAuthSession("gemini");
+
+  if (force) {
+    clearGeminiCredentials();
+  }
 
   const child = spawn("script", ["-qfec", providerConfig.command, "/dev/null"], {
     cwd: process.cwd(),
@@ -301,17 +360,13 @@ function startGeminiAuth(providerConfig) {
     geminiAuthSession = null;
     addLog({ type: "auth", provider: "gemini", level: "error", message: error.message });
   });
-  child.on("exit", (code, signal) => {
-    geminiAuthSession = null;
-    addLog({
-      type: "auth",
-      provider: "gemini",
-      level: code === 0 ? "info" : "warn",
-      message: `Gemini login finished with code ${code ?? "null"} signal ${signal ?? "none"}`
-    });
-  });
+
+  trackAuthProcess("gemini", child);
 
   geminiAuthSession = { child };
+  child.on("exit", () => {
+    geminiAuthSession = null;
+  });
 
   addLog({
     type: "auth",
@@ -342,17 +397,36 @@ export function submitGeminiAuthCode(code) {
   return { ok: true };
 }
 
-export function startAuth(provider, providerConfig) {
+export async function startAuth(provider, providerConfig, { force = false } = {}) {
   const type = providerType(provider, providerConfig);
 
   if (type === "http") {
     throw new Error("HTTP providers do not use CLI auth — configure baseUrl and apiKey instead");
   }
 
-  if (provider === "gemini") {
-    return startGeminiAuth(providerConfig);
+  if (!force) {
+    try {
+      const ready = await checkProviderReady(provider, providerConfig);
+      if (ready.ok) {
+        return {
+          alreadyAuthenticated: true,
+          output: ready.output,
+          mode: authFlowFor(provider).mode
+        };
+      }
+    } catch {
+      // Not ready — proceed with sign-in flow.
+    }
   }
 
+  if (provider === "gemini") {
+    return startGeminiAuth(providerConfig, { force });
+  }
+
+  return startCliAuth(provider, providerConfig);
+}
+
+function startCliAuth(provider, providerConfig) {
   const spec = getProviderSpec(provider, providerConfig);
   if (!spec.authArgs?.length) {
     throw new Error("No auth command configured for this provider");
@@ -405,19 +479,13 @@ export function startAuth(provider, providerConfig) {
   child.on("error", (error) => {
     addLog({ type: "auth", provider, level: "error", message: error.message });
   });
-  child.on("exit", (code, signal) => {
-    addLog({
-      type: "auth",
-      provider,
-      level: code === 0 ? "info" : "warn",
-      message: `Auth process exited with code ${code ?? "null"} signal ${signal ?? "none"}`
-    });
-  });
 
-  return { pid: child.pid };
+  trackAuthProcess(provider, child);
+
+  return { pid: child.pid, mode: authFlowFor(provider).mode };
 }
 
-function parseModels(provider, stdout) {
+export function parseModels(provider, stdout) {
   if (provider === "codex") {
     const body = JSON.parse(stdout);
     return (body.models ?? [])
@@ -449,13 +517,6 @@ function parseModels(provider, stdout) {
     .map((line) => ({ id: line, name: line }));
 }
 
-function includeSelectedModel(models, selectedModel) {
-  if (!selectedModel || models.some((model) => model.id === selectedModel)) {
-    return models;
-  }
-  return [{ id: selectedModel, name: `${selectedModel} (selected)` }, ...models];
-}
-
 export async function runProvider(provider, providerConfig, prompt, onChunk) {
   const type = providerType(provider, providerConfig);
 
@@ -476,7 +537,7 @@ export async function runProvider(provider, providerConfig, prompt, onChunk) {
   });
 }
 
-function runProcess({ provider, command, args, stdinText, timeoutMs, logType, onChunk }) {
+function runProcess({ provider, command, args, stdinText, timeoutMs, logType, onChunk, quiet = false }) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: process.cwd(),
@@ -524,12 +585,16 @@ function runProcess({ provider, command, args, stdinText, timeoutMs, logType, on
       clearTimeout(timer);
       if (settled) return;
       settled = true;
-      addLog({
-        type: logType,
-        provider,
-        level: code === 0 ? "info" : "error",
-        message: `${command} exited ${code}; stdout ${stdout.length} chars; stderr ${stderr.length} chars`
-      });
+      const summary = `${command} exited ${code}; stdout ${stdout.length} chars; stderr ${stderr.length} chars`;
+      const shouldLog = !quiet || logType !== "status" || code !== 0;
+      if (shouldLog) {
+        addLog({
+          type: logType,
+          provider,
+          level: code === 0 ? "info" : "error",
+          message: summary
+        });
+      }
       if (code === 0) {
         resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code });
       } else {

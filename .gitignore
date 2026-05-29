@@ -6,3 +6,13 @@ data/
 
 # Source artwork duplicate; shipped copy is public/routerbot.png
 /Routerbot.png
+
+# Local agent / project memory (not part of the public release)
+project_memory/
+project_*.md
+repo_map.md
+notes.md
+setup_repo.md
+.cursorrules
+AGENTS.md
+CLAUDE.md

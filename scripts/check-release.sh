@@ -8,7 +8,11 @@ echo "Scanning for personal hostnames and paths..."
 if grep -rE 'atlas-2|tail1a5964|/home/sketch' \
   --include='*.js' --include='*.md' --include='*.sh' --include='*.html' \
   --exclude='check-release.sh' \
-  --exclude-dir=node_modules --exclude-dir=data --exclude-dir=test --exclude-dir=.git .; then
+  --exclude='repo_map.md' --exclude='notes.md' --exclude='setup_repo.md' \
+  --exclude='AGENTS.md' --exclude='CLAUDE.md' --exclude='.cursorrules' \
+  --exclude='project_*.md' \
+  --exclude-dir=node_modules --exclude-dir=data --exclude-dir=test --exclude-dir=.git \
+  --exclude-dir=project_memory .; then
   echo "FAIL: Found sensitive patterns in tracked source files." >&2
   exit 1
 fi

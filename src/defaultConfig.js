@@ -18,7 +18,7 @@ export const defaultConfig = {
       icon: "🧠",
       enabled: true,
       command: "claude",
-      model: "sonnet",
+      model: "",
       models: [],
       timeoutMs: 300000
     },
@@ -48,7 +48,7 @@ export const defaultConfig = {
       icon: "✨",
       enabled: true,
       command: "gemini",
-      model: "auto",
+      model: "",
       models: [],
       timeoutMs: 300000
     }

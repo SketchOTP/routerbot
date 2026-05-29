@@ -81,6 +81,18 @@ cp config.example.json data/config.json
 
 ## Dashboard tour
 
+Sign-in is unified across providers:
+
+| Provider | Flow |
+|----------|------|
+| Claude / Cursor | Browser link (opens on your PC) |
+| Codex | Device URL + one-time code |
+| Gemini | Google link + paste authorization code |
+
+- If already signed in, the dashboard shows **Already signed in** (no blank popup).
+- Click **Re-sign in** to force a fresh login.
+- Health dots refresh automatically after sign-in completes.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Metrics: Base URL · Model · API key · Provider health  │

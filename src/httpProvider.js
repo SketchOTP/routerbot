@@ -1,4 +1,5 @@
 import { addLog } from "./logStore.js";
+import { alignProviderModel } from "./modelList.js";
 
 function normalizeBaseUrl(baseUrl) {
   return String(baseUrl ?? "")
@@ -99,7 +100,7 @@ async function streamHttpResponse(provider, response, onChunk) {
 export async function listHttpModels(provider, providerConfig) {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl);
   if (!baseUrl) {
-    return includeSelectedModel([], providerConfig.model);
+    return [];
   }
 
   const headers = {};
@@ -127,10 +128,10 @@ export async function listHttpModels(provider, providerConfig) {
     level: "info",
     message: `Loaded ${models.length} models from HTTP endpoint`
   });
-  return includeSelectedModel(models, providerConfig.model);
+  return alignProviderModel(providerConfig, models);
 }
 
-export async function checkHttpStatus(provider, providerConfig) {
+export async function checkHttpStatus(provider, providerConfig, { quiet = false } = {}) {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl);
   if (!baseUrl) {
     throw new Error("baseUrl is not configured");
@@ -151,13 +152,8 @@ export async function checkHttpStatus(provider, providerConfig) {
   }
 
   const output = `Reachable at ${baseUrl}`;
-  addLog({ type: "status", provider, level: "info", message: output });
-  return { stdout: output, stderr: "", code: 0 };
-}
-
-function includeSelectedModel(models, selectedModel) {
-  if (!selectedModel || models.some((model) => model.id === selectedModel)) {
-    return models;
+  if (!quiet) {
+    addLog({ type: "status", provider, level: "info", message: output });
   }
-  return [{ id: selectedModel, name: `${selectedModel} (selected)` }, ...models];
+  return { stdout: output, stderr: "", code: 0 };
 }

@@ -1,6 +1,6 @@
 {
   "name": "routerbot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-hosted OpenAI-compatible router for Cursor — Claude, Codex, Gemini, Ollama, and custom backends",
   "type": "module",
   "license": "MIT",
