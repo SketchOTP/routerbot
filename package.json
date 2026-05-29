@@ -1,6 +1,6 @@
 {
   "name": "routerbot",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Self-hosted OpenAI-compatible API router — Claude, Codex, Gemini, Ollama, vLLM, and custom backends behind one base URL",
   "type": "module",
   "license": "MIT",
