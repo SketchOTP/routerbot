@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseModels } from "../src/cli.js";
+import { discoverClaudeModels, loadClaudeBundledCatalog } from "../src/claudeModels.js";
 import { loadCodexBundledCatalog } from "../src/codexModels.js";
 import { loadGeminiCliModelCatalog } from "../src/geminiModels.js";
 import { alignProviderModel, parseCodexModelsCatalog } from "../src/modelList.js";
+import { openAiBaseUrl } from "../src/httpProvider.js";
+
+test("openAiBaseUrl appends /v1 when missing", () => {
+  assert.equal(openAiBaseUrl("http://127.0.0.1:1234"), "http://127.0.0.1:1234/v1");
+  assert.equal(openAiBaseUrl("http://127.0.0.1:1234/v1"), "http://127.0.0.1:1234/v1");
+  assert.equal(openAiBaseUrl("http://127.0.0.1:1234/v1/"), "http://127.0.0.1:1234/v1");
+});
 
 test("alignProviderModel clears stale selection not in provider list", () => {
   const providerConfig = { model: "fake-model" };
@@ -42,6 +50,22 @@ composer-2.5 - Composer 2.5`;
     models.map((model) => model.id),
     ["auto", "gpt-5.3-codex", "composer-2.5"]
   );
+});
+
+test("discoverClaudeModels includes documented Opus 4.8", async () => {
+  const models = await discoverClaudeModels("claude");
+  if (!models.length) {
+    return;
+  }
+  assert.ok(models.some((model) => model.id === "claude-opus-4-8"), "expected claude-opus-4-8");
+});
+
+test("loadClaudeBundledCatalog reads model ids from installed binary when present", () => {
+  const models = loadClaudeBundledCatalog("claude");
+  if (!models.length) {
+    return;
+  }
+  assert.ok(models.some((model) => model.id.startsWith("claude-sonnet-4")));
 });
 
 test("loadGeminiCliModelCatalog does not inject alias placeholders", () => {

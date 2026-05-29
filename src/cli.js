@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { authFlowFor } from "./authFlows.js";
 import { clearAuthSession, getAuthSession, ingestAuthOutput } from "./authSessions.js";
+import { discoverClaudeModels } from "./claudeModels.js";
 import { discoverCodexModels } from "./codexModels.js";
 import { checkGeminiAuthStatus, loadGeminiCliModelCatalog } from "./geminiModels.js";
 import { alignProviderModel } from "./modelList.js";
@@ -190,6 +191,11 @@ export async function listModels(provider, providerConfig) {
     if (!models.length) {
       throw new Error("Gemini CLI model catalog unavailable — reinstall or upgrade the gemini CLI");
     }
+  } else if (provider === "claude") {
+    models = await discoverClaudeModels(providerConfig.command);
+    if (!models.length) {
+      throw new Error("Claude model catalog unavailable — upgrade the claude CLI");
+    }
   } else if (provider === "codex") {
     models = await discoverCodexModels(providerConfig.command);
     if (!models.length) {
@@ -218,6 +224,9 @@ export async function listModels(provider, providerConfig) {
       quiet: true
     });
     models = parseModels(provider, result.stdout);
+    if (provider === "cursor") {
+      models = sortCursorModels(models);
+    }
     if (!models.length) {
       throw new Error("Model list command returned no models");
     }
@@ -515,6 +524,25 @@ export function parseModels(provider, stdout) {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => ({ id: line, name: line }));
+}
+
+function sortCursorModels(models) {
+  const rank = (id) => {
+    if (id.startsWith("composer")) {
+      return 0;
+    }
+    if (id === "auto") {
+      return 1;
+    }
+    return 2;
+  };
+  return [...models].sort((a, b) => {
+    const byRank = rank(a.id) - rank(b.id);
+    if (byRank !== 0) {
+      return byRank;
+    }
+    return a.name.localeCompare(b.name);
+  });
 }
 
 export async function runProvider(provider, providerConfig, prompt, onChunk) {

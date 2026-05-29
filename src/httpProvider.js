@@ -7,8 +7,20 @@ function normalizeBaseUrl(baseUrl) {
     .replace(/\/+$/, "");
 }
 
+/** OpenAI-compatible API root — accepts host-only URLs (appends /v1). */
+export function openAiBaseUrl(baseUrl) {
+  const normalized = normalizeBaseUrl(baseUrl);
+  if (!normalized) {
+    return "";
+  }
+  if (/\/v\d+$/.test(normalized)) {
+    return normalized;
+  }
+  return `${normalized}/v1`;
+}
+
 export async function runHttpProvider(provider, providerConfig, prompt, onChunk) {
-  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl);
+  const baseUrl = openAiBaseUrl(providerConfig.baseUrl);
   if (!baseUrl) {
     throw new Error(`${provider}: baseUrl is required for HTTP providers`);
   }
@@ -98,7 +110,7 @@ async function streamHttpResponse(provider, response, onChunk) {
 }
 
 export async function listHttpModels(provider, providerConfig) {
-  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl);
+  const baseUrl = openAiBaseUrl(providerConfig.baseUrl);
   if (!baseUrl) {
     return [];
   }
@@ -114,14 +126,23 @@ export async function listHttpModels(provider, providerConfig) {
   });
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} listing models`);
+    throw new Error(`HTTP ${response.status} listing models at ${baseUrl}/models`);
   }
 
   const payload = await response.json();
+  if (payload.error && !payload.data?.length) {
+    throw new Error(
+      `${payload.error} — set baseUrl to the OpenAI root (e.g. http://127.0.0.1:1234/v1)`
+    );
+  }
+
   const models = (payload.data ?? []).map((model) => ({
     id: model.id,
     name: model.id
   }));
+  if (!models.length) {
+    throw new Error(`No models returned from ${baseUrl}/models`);
+  }
   addLog({
     type: "models",
     provider,
@@ -132,7 +153,7 @@ export async function listHttpModels(provider, providerConfig) {
 }
 
 export async function checkHttpStatus(provider, providerConfig, { quiet = false } = {}) {
-  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl);
+  const baseUrl = openAiBaseUrl(providerConfig.baseUrl);
   if (!baseUrl) {
     throw new Error("baseUrl is not configured");
   }

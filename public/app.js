@@ -223,7 +223,7 @@ connectLogs();
 bindProviderInteractionLock();
 refreshStatus();
 
-els.save.addEventListener("click", saveConfig);
+els.save.addEventListener("click", () => saveConfig({ notify: true }));
 els.refreshStatus.addEventListener("click", () => refreshStatus({ manual: true }));
 els.addProvider.addEventListener("click", openAddProviderDialog);
 els.addProviderCancel.addEventListener("click", () => els.addProviderDialog.close());
@@ -772,7 +772,7 @@ function saveFallbackDialog() {
   renderRouting();
 }
 
-async function saveConfig() {
+async function saveConfig({ notify = false } = {}) {
   updateServerFromSettings();
   els.save.disabled = true;
   try {
@@ -781,15 +781,43 @@ async function saveConfig() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config)
     });
-    config = await response.json();
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body.error?.message ?? body.error ?? "Save failed");
+    }
+    config = body;
     ensureFallbackChain();
     if (config.server.apiKey) {
       setStoredApiKey(config.server.apiKey);
     }
     render();
+    if (notify) {
+      flashNotice("Saved successfully");
+    }
+  } catch (error) {
+    if (notify) {
+      flashNotice(error.message || "Save failed", { type: "error", ms: 4000 });
+    }
   } finally {
     els.save.disabled = false;
   }
+}
+
+function flashNotice(message, { type = "success", ms = 2600 } = {}) {
+  let toast = document.querySelector("#app-notice");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "app-notice";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.className = `app-notice ${type} visible`;
+  clearTimeout(flashNotice._timer);
+  flashNotice._timer = setTimeout(() => {
+    toast.classList.remove("visible");
+  }, ms);
 }
 
 async function addProvider(event) {
