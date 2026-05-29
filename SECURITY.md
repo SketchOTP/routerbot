@@ -5,7 +5,7 @@ RouterBot exposes an OpenAI-compatible API and a web dashboard on the same HTTP 
 ## API key
 
 - RouterBot generates a random API key on first startup and saves it to `data/config.json` (see README → **API key**).
-- The same key protects **both** `/v1/*` (Cursor) and `/api/*` (dashboard).
+- The same key protects **both** `/v1/*` (OpenAI-compatible API) and `/api/*` (dashboard).
 - Set `ROUTERBOT_API_KEY` in the environment to override the config file.
 - **Never** commit `data/config.json` or share your API key publicly.
 
@@ -20,7 +20,7 @@ If you expose RouterBot to the internet:
 1. Use a strong, unique API key.
 2. Understand that anyone with the key can call `/v1` **and** change config via `/api/config`.
 3. Restrict Tailscale Funnel with [Tailscale ACLs](https://tailscale.com/kb/1018/acls) where possible.
-4. Prefer tailnet-only access (`tailscale serve`) for the dashboard and a separate Funnel port only for Cursor Agent.
+4. Prefer tailnet-only access (`tailscale serve`) for the dashboard and a separate Funnel port only for remote API clients.
 
 ## Provider credentials
 

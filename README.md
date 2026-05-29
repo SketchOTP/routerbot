@@ -5,7 +5,7 @@
 <h1 align="center">RouterBot</h1>
 
 <p align="center">
-  <strong>One local OpenAI-compatible endpoint — route to every AI backend you run.</strong>
+  <strong>One OpenAI-compatible endpoint — route to every AI backend you run.</strong>
 </p>
 
 <p align="center">
@@ -19,22 +19,33 @@
 
 ---
 
-RouterBot is a self-hosted **routing proxy** for [Cursor](https://cursor.com). Point Cursor at a single model (`routerbot-local`); RouterBot classifies each request, picks a provider, runs your configured CLIs or HTTP APIs, and falls back automatically when something fails.
+RouterBot is a self-hosted **OpenAI-compatible API router**. Point any client that supports a custom OpenAI base URL, model name, and API key at RouterBot — IDEs, chat UIs, agents, scripts, or your own app. RouterBot classifies each request, picks a backend provider, runs your configured CLIs or HTTP APIs, and falls back automatically when something fails.
+
+**Works with:** Continue, Open WebUI, LibreChat, LangChain, custom HTTP clients, and any tool that speaks `POST /v1/chat/completions` and `GET /v1/models`. Cursor is a common example, not a requirement.
 
 No vendor lock-in to one CLI — mix Anthropic, OpenAI, Google, and local models behind one dashboard and one API key.
+
+## What's new in v0.2.0
+
+- **Unified provider sign-in** — one auth panel for Claude, Codex, Cursor Agent, and Gemini; detects already-signed-in state; **Re-sign in** when you need a fresh login
+- **Real model lists** — dropdowns show only models each provider actually exposes (no synthetic placeholders); Codex discovery from the installed CLI
+- **Inbound API activity** — Activity log records `GET /v1/models` and `POST /v1/chat/completions` (start, success, errors, duration)
+- **Quieter dashboard** — status polling no longer spams the log or closes open dropdowns
+- **22 automated tests** — auth flows, model alignment, release hygiene scan
 
 ## Why RouterBot?
 
 | Problem | RouterBot |
 |---------|-----------|
-| Cursor only talks to one custom model at a time | One base URL, many backends |
+| Each app wants its own base URL and backend | One `/v1` endpoint, many providers |
 | Switching between Claude / Codex / Gemini is manual | Task-based routing (`code` → Codex, `plan` → Claude, …) |
 | Remote server has no browser for CLI login | Dashboard opens OAuth/device-login URLs **on your PC** |
-| Homelab needs Tailscale + tunnels for Agent mode | Built-in Serve/Funnel helpers and URL preview |
+| Homelab needs HTTPS for remote clients | Built-in Tailscale Serve/Funnel helpers and URL preview |
 | Want Ollama or vLLM beside cloud CLIs | HTTP providers + generic CLI adapters |
 
 ## Features
 
+- **OpenAI-compatible API** — `/v1/models`, `/v1/chat/completions` (streaming supported)
 - **Web dashboard** — enable providers, pick models, authenticate CLIs, live activity log
 - **Task routing** — keyword classifier sends `code`, `debug`, `plan`, etc. to different backends
 - **Fallback chain** — configurable order when the primary provider errors out
@@ -57,7 +68,7 @@ npm start
 
 Open the dashboard: **http://127.0.0.1:4117**
 
-On first run, RouterBot prints a generated API key — save it for Cursor and remote dashboard access.
+On first run, RouterBot prints a generated API key — save it for API clients and remote dashboard access.
 
 Optional: seed config from the example:
 
@@ -67,17 +78,36 @@ cp config.example.json data/config.json
 # edit tailscaleHost, providers, routing…
 ```
 
-## Use with Cursor
+## Connect a client
 
-| Cursor setting | Value |
-|----------------|-------|
-| **Override OpenAI Base URL** | RouterBot base URL from the dashboard (must end with `/v1`) |
+Any OpenAI-compatible client needs three values from the dashboard:
+
+| Setting | Value |
+|---------|-------|
+| **Base URL** | RouterBot URL ending in `/v1` (e.g. `http://127.0.0.1:4117/v1`) |
 | **API key** | Your RouterBot API key |
 | **Model** | `routerbot-local` (or your `server.exposedModel`) |
 
-**Local chat only:** `http://127.0.0.1:4117/v1`
+**Local only:** `http://127.0.0.1:4117/v1`
 
-**Cursor Agent mode** needs a public HTTPS URL (Tailscale Funnel, cloudflared, or ngrok) — see [Public access](#public-access-for-cursor-agent).
+**Remote clients** (cloud agents, phones, other machines) need a reachable HTTPS URL — see [Public access](#public-access).
+
+### Example: Cursor
+
+| Setting | Value |
+|---------|-------|
+| Override OpenAI Base URL | `https://YOUR_HOST:10000/v1` (or local URL above) |
+| API key | RouterBot API key |
+| Model | `routerbot-local` |
+
+### Example: curl
+
+```bash
+curl -s http://127.0.0.1:4117/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"routerbot-local","messages":[{"role":"user","content":"Hello"}]}'
+```
 
 ## Dashboard tour
 
@@ -85,12 +115,13 @@ Sign-in is unified across providers:
 
 | Provider | Flow |
 |----------|------|
-| Claude / Cursor | Browser link (opens on your PC) |
+| Claude / Cursor Agent | Browser link (opens on your PC) |
 | Codex | Device URL + one-time code |
 | Gemini | Google link + paste authorization code |
 
 - If already signed in, the dashboard shows **Already signed in** (no blank popup).
 - Click **Re-sign in** to force a fresh login.
+- Click **↻** on a provider card to load its real model list.
 - Health dots refresh automatically after sign-in completes.
 
 ```
@@ -102,7 +133,7 @@ Sign-in is unified across providers:
 │  · sign-in buttons     │  · default provider           │
 │  · emoji icons         │                               │
 ├────────────────────────┴───────────────────────────────┤
-│  Activity log (routes, fallbacks, auth)                   │
+│  Activity log (API requests, routes, fallbacks, auth)   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -121,7 +152,7 @@ One key protects both the OpenAI API (`/v1`) and the admin API (`/api`).
 | **Config file** | `grep apiKey data/config.json` |
 | **Environment** | `ROUTERBOT_API_KEY=…` (overrides file) |
 
-Rotate anytime in Server settings → **Save** → update Cursor.
+Rotate anytime in Server settings → **Save** → update your clients.
 
 If port `4117` is in use, RouterBot is already running (e.g. systemd) — use `sudo systemctl restart routerbot` instead of a second `npm start`.
 
@@ -174,9 +205,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) to extend built-in adapters.
 
 Configure both in the **Routing** panel; new providers appear in dropdowns automatically.
 
-## Public access for Cursor Agent
+## Public access
 
-Cursor Agent calls your base URL from the cloud — `localhost` will not work.
+Remote clients cannot reach `localhost`. Expose RouterBot over HTTPS when callers run on another machine or in the cloud.
 
 ### Tailscale (recommended)
 
@@ -187,7 +218,7 @@ Cursor Agent calls your base URL from the cloud — `localhost` will not work.
 | Port | Use |
 |------|-----|
 | `9420` | Tailnet dashboard (private) |
-| `10000` | Public Funnel → use in Cursor as `https://YOUR_HOST:10000/v1` |
+| `10000` | Public Funnel → `https://YOUR_HOST:10000/v1` |
 
 Set `server.tailscaleHost` in the dashboard, then **Save**.
 
@@ -201,7 +232,7 @@ cloudflared tunnel --url http://127.0.0.1:4117
 ngrok http 4117
 ```
 
-Use the HTTPS URL + `/v1` in Cursor.
+Use the HTTPS URL + `/v1` as your client base URL.
 
 ## Run at boot (systemd)
 

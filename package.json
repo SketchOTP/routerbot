@@ -1,7 +1,7 @@
 {
   "name": "routerbot",
   "version": "0.2.0",
-  "description": "Self-hosted OpenAI-compatible router for Cursor — Claude, Codex, Gemini, Ollama, and custom backends",
+  "description": "Self-hosted OpenAI-compatible API router — Claude, Codex, Gemini, Ollama, vLLM, and custom backends behind one base URL",
   "type": "module",
   "license": "MIT",
   "author": "Tym Huseby",
