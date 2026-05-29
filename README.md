@@ -25,7 +25,7 @@ RouterBot is a self-hosted **OpenAI-compatible API router**. Point any client th
 
 No vendor lock-in to one CLI — mix Anthropic, OpenAI, Google, and local models behind one dashboard and one API key.
 
-## What's new in v0.2.0
+## What's new in v0.2.1
 
 - **Unified provider sign-in** — one auth panel for Claude, Codex, Cursor Agent, and Gemini; detects already-signed-in state; **Re-sign in** when you need a fresh login
 - **Real model lists** — dropdowns show only models each provider actually exposes (no synthetic placeholders); Codex discovery from the installed CLI
